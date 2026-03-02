@@ -9,19 +9,15 @@
     ╔══════════════════════════════════════════════════════════════════════╗
     ║  FFmpeg Interactive Tool — Client-Side Media Processing            ║
     ║                                                                    ║
-    ║  CRITICAL: This app requires the following HTTP headers to work:   ║
-    ║    Cross-Origin-Opener-Policy: same-origin                         ║
-    ║    Cross-Origin-Embedder-Policy: require-corp                      ║
-    ║                                                                    ║
-    ║  SharedArrayBuffer is required for the multi-threaded FFmpeg.wasm  ║
-    ║  core. Without the headers above, the browser will block it.       ║
+    ║  All FFmpeg assets are bundled locally in the ffmpeg/ directory.   ║
+    ║  No CDN or internet connection required.                           ║
     ║                                                                    ║
     ║  Will NOT work via file:// protocol. Use a local dev server.       ║
     ╚══════════════════════════════════════════════════════════════════════╝
     -->
 
-    <script src="https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/umd/ffmpeg.js"></script>
-    <script src="https://unpkg.com/@ffmpeg/util@0.12.1/dist/umd/util.js"></script>
+    <script src="ffmpeg/ffmpeg.js"></script>
+    <script src="ffmpeg/util.js"></script>
 
     <style>
         /* ───────────────────── CSS Reset & Variables ───────────────────── */
@@ -693,64 +689,6 @@
             border-color: var(--text-muted);
         }
 
-        /* ───────────────────── WASM Loading Overlay ───────────────────── */
-        .wasm-overlay {
-            position: fixed;
-            inset: 0;
-            background: rgba(13,17,23,0.92);
-            z-index: 9999;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            gap: 20px;
-            backdrop-filter: blur(4px);
-        }
-
-        .spinner {
-            width: 48px;
-            height: 48px;
-            border: 4px solid var(--border);
-            border-top-color: var(--accent);
-            border-radius: 50%;
-            animation: spin 0.8s linear infinite;
-        }
-
-        @keyframes spin {
-            to { transform: rotate(360deg); }
-        }
-
-        .wasm-overlay .load-text {
-            font-size: 1rem;
-            color: var(--text-secondary);
-            font-weight: 500;
-        }
-
-        .wasm-overlay .load-sub {
-            font-size: 0.8rem;
-            color: var(--text-muted);
-        }
-
-        .wasm-load-error {
-            background: var(--danger-bg);
-            border: 1px solid rgba(248,81,73,0.4);
-            border-radius: var(--radius);
-            padding: 16px 20px;
-            color: var(--danger);
-            font-size: 0.85rem;
-            max-width: 480px;
-            text-align: center;
-            line-height: 1.6;
-        }
-
-        .wasm-load-error code {
-            background: rgba(248,81,73,0.15);
-            padding: 1px 6px;
-            border-radius: 4px;
-            font-family: var(--font-mono);
-            font-size: 0.78rem;
-        }
-
         /* ───────────────────── Footer ───────────────────── */
         .app-footer {
             border-top: 1px solid var(--border);
@@ -809,13 +747,6 @@
 </head>
 <body>
 
-    <!-- ═══════════ WASM Loading Overlay ═══════════ -->
-    <div class="wasm-overlay" id="wasmOverlay">
-        <div class="spinner" id="wasmSpinner"></div>
-        <div class="load-text" id="wasmLoadText">Loading FFmpeg.wasm core…</div>
-        <div class="load-sub" id="wasmLoadSub">This may take a moment on first visit</div>
-    </div>
-
     <!-- ═══════════ Header ═══════════ -->
     <header class="app-header">
         <div class="container">
@@ -826,22 +757,6 @@
             </div>
         </div>
     </header>
-
-    <!-- ═══════════ COOP/COEP Warning Banner ═══════════ -->
-    <div class="container">
-        <div class="warning-banner" id="warningBanner">
-            <span class="warn-icon">⚠️</span>
-            <div>
-                <strong>Server Headers Required.</strong>
-                This tool uses <code>SharedArrayBuffer</code> for multi-threaded processing.
-                Your server must send
-                <code>Cross-Origin-Opener-Policy: same-origin</code> and
-                <code>Cross-Origin-Embedder-Policy: require-corp</code>.
-                It will <strong>not</strong> work via <code>file://</code> — use a local HTTP server.
-            </div>
-            <button class="dismiss-btn" onclick="document.getElementById('warningBanner').classList.add('hidden')" aria-label="Dismiss">✕</button>
-        </div>
-    </div>
 
     <!-- ═══════════ Main Content ═══════════ -->
     <main class="main-content">
@@ -1023,7 +938,7 @@
                 </div>
                 <div class="card-body" style="padding:12px;">
                     <div class="log-console" id="logConsole">
-                        <div class="log-line log-info">FFmpeg Interactive Tool initialized. Awaiting WASM core load…</div>
+                        <div class="log-line log-info">FFmpeg Interactive Tool ready. Select a file and run a command.</div>
                     </div>
                 </div>
             </section>
@@ -1049,10 +964,6 @@
         const { fetchFile } = FFmpegUtil;
 
         const $ = (sel) => document.querySelector(sel);
-        const wasmOverlay   = $('#wasmOverlay');
-        const wasmSpinner   = $('#wasmSpinner');
-        const wasmLoadText  = $('#wasmLoadText');
-        const wasmLoadSub   = $('#wasmLoadSub');
         const dropzone      = $('#dropzone');
         const fileInput     = $('#fileInput');
         const browseBtn     = $('#browseBtn');
@@ -1160,59 +1071,27 @@
             }
         }
 
-        /* ─────────── WASM Initialization ─────────── */
-        async function initFFmpeg() {
-            try {
+        /* ─────────── WASM Initialization (lazy) ─────────── */
+        async function ensureFFmpegLoaded() {
+            if (loaded) return;
+            if (!ffmpeg) {
                 ffmpeg = new FFmpeg();
-
-                // Wire up log handler
-                ffmpeg.on('log', ({ message }) => {
-                    log(message);
-                });
-
-                // Wire up progress handler
-                ffmpeg.on('progress', ({ progress, time }) => {
+                ffmpeg.on('log', ({ message }) => { log(message); });
+                ffmpeg.on('progress', ({ progress }) => {
                     const pct = Math.max(0, Math.min(100, Math.round(progress * 100)));
                     progressPct.textContent = pct + '%';
                     progressFill.style.width = pct + '%';
                     progressFill.classList.remove('indeterminate');
                 });
-
-                const baseURL = 'https://unpkg.com/@ffmpeg/core-mt@0.12.6/dist/umd';
-
-                wasmLoadText.textContent = 'Downloading FFmpeg WASM core…';
-                log('Fetching FFmpeg multi-threaded core from CDN…', 'info');
-
-                await ffmpeg.load({
-                    coreURL: `${baseURL}/ffmpeg-core.js`,
-                    wasmURL: `${baseURL}/ffmpeg-core.wasm`,
-                    workerURL: `${baseURL}/ffmpeg-core.worker.js`,
-                });
-
-                loaded = true;
-                log('✔ FFmpeg.wasm loaded successfully (multi-threaded).', 'success');
-                wasmOverlay.classList.add('hidden');
-                updateRunBtnState();
-
-            } catch (err) {
-                console.error(err);
-                log('✘ Failed to load FFmpeg.wasm: ' + err.message, 'error');
-                wasmSpinner.classList.add('hidden');
-                wasmLoadText.textContent = 'Failed to load FFmpeg core';
-                wasmLoadSub.textContent = '';
-                const errDiv = document.createElement('div');
-                errDiv.className = 'wasm-load-error';
-                errDiv.innerHTML = `
-                    <p><strong>Could not initialize FFmpeg.wasm.</strong></p>
-                    <p style="margin-top:8px">Ensure your server sends the required headers:</p>
-                    <p style="margin-top:6px">
-                        <code>Cross-Origin-Opener-Policy: same-origin</code><br>
-                        <code>Cross-Origin-Embedder-Policy: require-corp</code>
-                    </p>
-                    <p style="margin-top:10px;font-size:0.78rem;color:var(--text-muted)">Error: ${err.message}</p>
-                `;
-                wasmOverlay.appendChild(errDiv);
             }
+            log('Loading FFmpeg core…', 'info');
+            // Single-threaded core: no SharedArrayBuffer or COOP/COEP headers needed
+            await ffmpeg.load({
+                coreURL: 'ffmpeg/ffmpeg-core.js',
+                wasmURL: 'ffmpeg/ffmpeg-core.wasm',
+            });
+            loaded = true;
+            log('✔ FFmpeg core ready.', 'success');
         }
 
         /* ─────────── File Input ─────────── */
@@ -1343,7 +1222,7 @@
 
         /* ─────────── Run Button State ─────────── */
         function updateRunBtnState() {
-            runBtn.disabled = !loaded || !inputFile || !commandInput.value.trim() || isRunning;
+            runBtn.disabled = !inputFile || !commandInput.value.trim() || isRunning;
         }
 
         commandInput.addEventListener('input', updateRunBtnState);
@@ -1352,7 +1231,7 @@
         runBtn.addEventListener('click', runConversion);
 
         async function runConversion() {
-            if (!loaded || !inputFile || isRunning) return;
+            if (!inputFile || isRunning) return;
 
             const rawCmd = commandInput.value.trim();
             if (!rawCmd) return;
@@ -1375,6 +1254,7 @@
             log(`▶ Running: ffmpeg ${rawCmd}`, 'info');
 
             try {
+                await ensureFFmpegLoaded();
                 // Determine the input file name used in the command
                 const ext = extOf(inputFile.name);
                 const inName = 'input_file' + ext;
@@ -1531,7 +1411,7 @@
         });
 
         /* ─────────── Init ─────────── */
-        initFFmpeg();
+        updateRunBtnState();
 
     })();
     </script>
